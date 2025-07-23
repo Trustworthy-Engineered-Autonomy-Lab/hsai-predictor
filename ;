@@ -1,0 +1,140 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
+import torchvision.utils as vutils
+
+# Define VAE class with customizable latent size
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class Encoder(nn.Module):
+    def __init__(self, in_channels=3, hidden_dim=224, z_dim=64):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(
+                in_channels, hidden_dim, kernel_size=4, stride=2, padding=1
+            ),  # 40x60
+            nn.ReLU(),
+            nn.Conv2d(
+                hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1
+            ),  # 20x30
+            nn.ReLU(),
+            nn.Conv2d(
+                hidden_dim, z_dim, kernel_size=1
+            ),  # No spatial change, output: (B, z_dim, 20, 30)
+        )
+
+    def forward(self, x):
+        return self.conv(x)
+
+
+class Decoder(nn.Module):
+    def __init__(self, z_dim=64, hidden_dim=224, out_channels=3):
+        super().__init__()
+        self.deconv = nn.Sequential(
+            nn.ConvTranspose2d(
+                z_dim, hidden_dim, kernel_size=4, stride=2, padding=1
+            ),  # 40x60
+            nn.ReLU(),
+            nn.ConvTranspose2d(
+                hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1
+            ),  # 80x120
+            nn.ReLU(),
+            nn.Conv2d(hidden_dim, out_channels, kernel_size=1),
+        )
+
+    def forward(self, x):
+        return self.deconv(x)
+
+
+class VectorQuantizer(nn.Module):
+    def __init__(self, num_embeddings=512, embedding_dim=64, commitment_cost=0.25):
+        super().__init__()
+        self.embedding_dim = embedding_dim
+        self.num_embeddings = num_embeddings
+        self.commitment_cost = commitment_cost
+
+        self.embedding = nn.Embedding(num_embeddings, embedding_dim)
+        self.embedding.weight.data.uniform_(-1 / num_embeddings, 1 / num_embeddings)
+
+    def forward(self, z):
+        # z: (B, C, H, W)
+        z_perm = z.permute(0, 2, 3, 1).contiguous()  # (B, H, W, C)
+        flat_z = z_perm.view(-1, self.embedding_dim)  # (B*H*W, C)
+
+        distances = (
+            torch.sum(flat_z**2, dim=1, keepdim=True)
+            - 2 * torch.matmul(flat_z, self.embedding.weight.t())
+            + torch.sum(self.embedding.weight**2, dim=1)
+        )  # (B*H*W, num_embeddings)
+
+        encoding_indices = torch.argmin(distances, dim=1).unsqueeze(1)  # (B*H*W, 1)
+        encodings = torch.zeros(
+            encoding_indices.size(0), self.num_embeddings, device=z.device
+        )
+        encodings.scatter_(1, encoding_indices, 1)
+
+        quantized = torch.matmul(encodings, self.embedding.weight).view(z_perm.shape)
+        quantized = quantized.permute(0, 3, 1, 2).contiguous()  # (B, C, H, W)
+
+        e_latent_loss = F.mse_loss(quantized.detach(), z)
+        q_latent_loss = F.mse_loss(quantized, z.detach())
+        loss = q_latent_loss + self.commitment_cost * e_latent_loss
+
+        quantized = z + (quantized - z).detach()
+
+        return (
+            quantized,
+            loss,
+            encoding_indices.view(z.shape[0], z.shape[2], z.shape[3]),
+        )
+
+
+class VQVAE(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.encoder = Encoder()
+        self.vq = VectorQuantizer()
+        self.decoder = Decoder()
+
+    def forward(self, x):
+        z = self.encoder(x)
+        z_q, vq_loss, _ = self.vq(z)
+        x_recon = self.decoder(z_q)
+        recon_loss = F.mse_loss(x_recon, x)
+        loss = recon_loss + vq_loss
+        return x_recon, loss, recon_loss, vq_loss
+
+
+# Training function
+def train_vae(model, train_loader, optimizer, device, epoch):
+    model.train()
+    total_loss = 0
+    for batch_idx, data in enumerate(TrainLoader):
+        input, label, action, use1, use2 = data
+        x = input.to(device)
+        optimizer.zero_grad()
+
+        recon, total_loss, recon_loss, vq_loss = model(x)
+        # recon_x, mu, logvar = model(x)
+        loss = total_loss
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item()
+        # if batch_idx == 0:
+        #     vutils.save_image(
+        #         x.cpu(),
+        #         "./vqsave/first_batch_input" + str(epoch) + ".png",
+        #         normalize=True,
+        #     )
+        #     vutils.save_image(
+        #         recon.cpu(),
+        #         "./vqsave/savefirst_batch_recon" + str(epoch) + ".png",
+        #         normalize=True,
+        #     )
+
+    torch.save(model.state_dict(), "vqv_vae_weights.pth")
+    return total_loss / len(train_loader.dataset)
