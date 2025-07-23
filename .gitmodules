@@ -1,0 +1,3 @@
+[submodule "MonoLstm/donkeycar_tests"]
+	path = MonoLstm/donkeycar_tests
+	url = https://github.com/MrinallU/Safety-Detection-Model
