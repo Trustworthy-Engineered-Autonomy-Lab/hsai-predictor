@@ -1,8 +1,0 @@
-Results for Horizon 10 and Sequence Length 32:
-_______________________________________________
-MSE:  0.4009
-Accuracy:  0.8524
-Results for Horizon 10 and Sequence Length 32:
-_______________________________________________
-MSE:  0.4049
-Accuracy:  0.8731
