@@ -1,6 +1,6 @@
 
 
-# How Safe Am I Given What I See?
+# How Safe Will I Be Given What I Saw? 
 
 
 **Calibrated Prediction of Safety Chances for Image-Controlled Autonomy**
